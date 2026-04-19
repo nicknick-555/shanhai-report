@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>捷途山海·快手投放日报</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Microsoft YaHei','PingFang SC',sans-serif;
+       background: #f0f2f5; color: #000; font-size: 13px; }
+.header { background: #1a1a2e; padding: 11px 18px; display: flex;
+          align-items: center; justify-content: space-between;
+          position: sticky; top: 0; z-index: 200;
+          box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+.header-title { color: #FFC000; font-size: 15px; font-weight: 700; letter-spacing: 1px; }
+.upd { color: #aaa; font-size: 12px; }
+.dl-btn { border: none; padding: 6px 12px; border-radius: 4px;
+          font-weight: 700; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.dl-btn.all { background: #FFC000; color: #1a1a2e; }
+.dl-btn.cur { background: #92D050; color: #1a1a2e; }
+.dl-btn:hover { filter: brightness(.9); }
+.dl-btn:disabled { background: #555; color: #999; cursor: not-allowed; filter: none; }
+.tab-bar { background: #fff; border-bottom: 2px solid #FFC000;
+           display: flex; overflow-x: auto; padding: 0 10px;
+           position: sticky; top: 43px; z-index: 199; scrollbar-width: none; }
+.tab-bar::-webkit-scrollbar { display: none; }
+.tab { display: inline-block; padding: 9px 13px; cursor: pointer; font-size: 12px;
+       color: #555; border-bottom: 3px solid transparent; margin-bottom: -2px;
+       white-space: nowrap; transition: all .15s; }
+.tab.active { color: #b8850a; border-color: #FFC000; font-weight: 700; background: #fffde7; }
+.tab:hover { background: #fafafa; }
+.content { padding: 12px; }
+.section { display: none; }
+.section.active { display: block; }
+.card { background: #fff; border-radius: 6px; margin-bottom: 12px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+.card-hdr { background: #f7f7f7; border-bottom: 1px solid #e8e8e8;
+            padding: 8px 14px; font-weight: 700; font-size: 13px;
+            border-left: 4px solid #FFC000; }
+.sub-hdr { background: #f0f0f0; border-bottom: 1px solid #e0e0e0;
+           padding: 6px 14px; font-weight: 700; font-size: 12px; color: #444;
+           border-left: 4px solid #92D050; }
+.text-box { padding: 14px 16px; white-space: pre-wrap; line-height: 2;
+            font-size: 14px; color: #222; }
+.toolbar { padding: 9px 12px; background: #fafafa;
+           border-bottom: 1px solid #eee; display: flex; gap: 8px; flex-wrap: wrap; }
+.s-inp { padding: 5px 10px; border: 1px solid #d9d9d9; border-radius: 4px;
+         font-size: 12px; outline: none; min-width: 150px; }
+.s-inp:focus { border-color: #FFC000; }
+.s-sel { padding: 5px 8px; border: 1px solid #d9d9d9; border-radius: 4px;
+         font-size: 12px; min-width: 140px; }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 12px; }
+table th { padding: 6px 8px; border: 1px solid #bbb; text-align: center;
+           white-space: nowrap; font-size: 11px; }
+table td { padding: 5px 8px; border: 1px solid #ddd; text-align: center;
+           white-space: nowrap; color: #222; }
+table tbody tr:hover td { background: #fffde7 !important; }
+#loading { text-align: center; padding: 80px; color: #888; }
+.spin { width: 30px; height: 30px; border: 3px solid #eee; border-top-color: #FFC000;
+        border-radius: 50%; animation: sp .7s linear infinite; margin: 0 auto 10px; }
+@keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-title">捷途山海 · 快手投放日报</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div class="upd" id="upd">加载中...</div>
+    <button class="dl-btn all" id="dlAllBtn" onclick="exportExcel('all')" disabled>⬇ 全部导出</button>
+    <button class="dl-btn cur" id="dlTabBtn" onclick="exportExcel('tab')" disabled>⬇ 当前Tab</button>
+  </div>
+</div>
+
+<div class="tab-bar" id="tabBar"></div>
+<div class="content">
+  <div id="loading"><div class="spin"></div>数据加载中...</div>
+  <div id="sections"></div>
+</div>
+
+<script>
+// ── 全局状态 ──
+let _data = null;
+let _activeTab = '';
+
+const TABS = [
+  '文字报表','文字日报1','文字日报2','数字人文字日报',
+  '月度直播累计','数字人单独报','经销商简报',
+  '山海（含直播）','山海（不含直播）','山海余额','山海erp余额','经销商日投放数据'
+];
+
+function ek(k){ return k.replace(/[（）\s]/g,'_'); }
+
+function switchTab(key){
+  _activeTab = key;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.key===key));
+  document.querySelectorAll('.section').forEach(s=>s.classList.toggle('active',s.id==='S_'+ek(key)));
+}
+
+// ── 表格行过滤 ──
+function filterRows(tbodyId, kwds){
+  const tbody = document.getElementById(tbodyId);
+  if(!tbody) return;
+  for(const tr of tbody.rows){
+    const t = tr.textContent.toLowerCase();
+    tr.style.display = kwds.every(k=>!k||t.includes(k.toLowerCase())) ? '' : 'none';
+  }
+}
+
+// ── 单元格构建 ──
+function makeCell(cd, isHdr){
+  const el = document.createElement(isHdr?'th':'td');
+  el.textContent = cd.v||'';
+  if(cd.bg) el.style.backgroundColor = cd.bg;
+  if(cd.bold) el.style.fontWeight = '700';
+  if(cd.fc) el.style.color = cd.fc;
+  if(cd.rowspan>1) el.rowSpan = cd.rowspan;
+  if(cd.colspan>1) el.colSpan = cd.colspan;
+  return el;
+}
+
+// ── 工具栏 ──
+function mkToolbar(items){
+  const tb = document.createElement('div'); tb.className='toolbar';
+  items.forEach(it=>{
+    if(it.type==='sel'){
+      const el=document.createElement('select');
+      el.className='s-sel'; el.id=it.id;
+      el.innerHTML=`<option value="">${it.ph}</option>`;
+      tb.appendChild(el);
+    } else {
+      const el=document.createElement('input');
+      el.className='s-inp'; el.id=it.id; el.placeholder=it.ph||'';
+      if(it.style) el.style.cssText=it.style;
+      tb.appendChild(el);
+    }
+  });
+  return tb;
+}
+
+function fillSel(id, items, ph){
+  const el=document.getElementById(id); if(!el) return;
+  el.innerHTML=`<option value="">${ph}</option>`+
+    items.map(v=>`<option value="${v}">${v}</option>`).join('');
+}
+
+function bindFilter(ids, fn){
+  ids.forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.tagName==='SELECT'?(el.onchange=fn):(el.oninput=fn);
+  });
+}
+
+// ── 带样式表格 ──
+function renderStyled(rows, container, tbodyId){
+  const tbl=document.createElement('table'); tbl.style.width='100%';
+  const thead=tbl.createTHead(); const tbody=tbl.createTBody(); tbody.id=tbodyId;
+  rows.forEach(row=>{
+    const isHdr=row.some(c=>c.bg)||row.some(c=>c.bold);
+    const tr=document.createElement('tr');
+    row.forEach(cd=>{ if(cd.skip)return; tr.appendChild(makeCell(cd,isHdr)); });
+    (isHdr?thead:tbody).appendChild(tr);
+  });
+  const wrap=document.createElement('div'); wrap.className='tbl-wrap'; wrap.appendChild(tbl);
+  container.appendChild(wrap);
+  return tbody;
+}
+
+// ── 简单表格 ──
+function renderSimple(sheet, container, tbodyId){
+  const tbl=document.createElement('table'); tbl.style.width='100%';
+  const thead=tbl.createTHead(); const tbody=tbl.createTBody(); tbody.id=tbodyId;
+  const htr=thead.insertRow();
+  (sheet.headers||[]).forEach(h=>{
+    const th=document.createElement('th'); th.textContent=h;
+    if(sheet.header_bg) th.style.backgroundColor=sheet.header_bg;
+    th.style.fontWeight='700'; htr.appendChild(th);
+  });
+  (sheet.rows||[]).slice(0,2000).forEach(row=>{
+    const tr=tbody.insertRow(); row.forEach(v=>{tr.insertCell().textContent=v;});
+  });
+  const wrap=document.createElement('div'); wrap.className='tbl-wrap'; wrap.appendChild(tbl);
+  container.appendChild(wrap);
+  return tbody;
+}
+
+// ── 月度直播累计 ──
+function renderLiveCumul(sheet, card){
+  const tbodyId='TB_live';
+  card.appendChild(mkToolbar([
+    {id:'IN_live',ph:'搜索经销商/大区/优化师...'},
+    {id:'SL_live_area',type:'sel',ph:'全部大区'},
+    {id:'SL_live_opt',type:'sel',ph:'全部优化师'},
+  ]));
+  const tbl=document.createElement('table'); tbl.style.width='100%';
+  const thead=tbl.createTHead(); const tbody=tbl.createTBody(); tbody.id=tbodyId;
+  sheet.header_rows.forEach(row=>{
+    const tr=document.createElement('tr');
+    row.forEach(cd=>{ if(cd.skip)return; tr.appendChild(makeCell(cd,true)); });
+    thead.appendChild(tr);
+  });
+  sheet.data_rows.forEach(row=>{
+    const tr=tbody.insertRow(); row.forEach(v=>{tr.insertCell().textContent=v;});
+  });
+  const wrap=document.createElement('div'); wrap.className='tbl-wrap'; wrap.appendChild(tbl);
+  card.appendChild(wrap);
+  setTimeout(()=>{
+    const areas=[...new Set(sheet.data_rows.map(r=>r[1]).filter(Boolean))].sort();
+    const opts=[...new Set(sheet.data_rows.map(r=>r[4]).filter(Boolean))].sort();
+    fillSel('SL_live_area',areas,'全部大区');
+    fillSel('SL_live_opt',opts,'全部优化师');
+    const fn=()=>filterRows(tbodyId,[
+      document.getElementById('IN_live')?.value||'',
+      document.getElementById('SL_live_area')?.value||'',
+      document.getElementById('SL_live_opt')?.value||''
+    ]);
+    bindFilter(['IN_live','SL_live_area','SL_live_opt'],fn);
+  },50);
+}
+
+// ── 经销商简报：下拉动态卡片 ──
+function renderJianbao(sheet, card){
+  card.appendChild(mkToolbar([{id:'SL_jb',type:'sel',ph:'请选择经销商'}]));
+  const view=document.createElement('div'); view.style.cssText='padding:14px 16px;';
+  card.appendChild(view);
+
+  function show(dealer){
+    view.innerHTML='';
+    if(!dealer){
+      view.innerHTML='<div style="color:#999;padding:20px;text-align:center">← 请从上方下拉列表选择经销商</div>';
+      return;
+    }
+    const d=sheet.data[dealer];
+    if(!d){ view.innerHTML='<div style="color:#e00">暂无数据</div>'; return; }
+
+    const labels=sheet.row_labels||['时间','消耗金额','商业线索数量','商业线索成本'];
+    const singles=[d.date_single,d.cost_single,d.leads_single,d.cpl_single];
+    const cumuls=[d.date_cumul,d.cost_cumul,d.leads_cumul,d.cpl_cumul];
+    const clbl=sheet.col_cumul_label||'本月累计';
+
+    const titleEl=document.createElement('div');
+    titleEl.style.cssText='background:#2D529F;color:#fff;font-weight:700;font-size:13px;padding:8px 12px;border-radius:4px 4px 0 0;';
+    titleEl.textContent=sheet.title||'【直播】数据简报';
+    view.appendChild(titleEl);
+
+    const storeEl=document.createElement('div');
+    storeEl.style.cssText='background:#BFBFBF;font-weight:700;padding:7px 12px;font-size:13px;border-bottom:1px solid #ccc;';
+    storeEl.textContent='门店名称：'+dealer;
+    view.appendChild(storeEl);
+
+    const tbl=document.createElement('table');
+    tbl.style.cssText='border-collapse:collapse;font-size:13px;min-width:320px;margin-top:2px;';
+    const thead=tbl.createTHead(); const htr=thead.insertRow();
+    [{v:'',cs:1},{v:singles[0]||'当日',cs:1},{v:clbl,cs:2}].forEach(({v,cs})=>{
+      const th=document.createElement('th'); th.textContent=v;
+      th.style.cssText='border:1px solid #ccc;padding:7px 14px;background:#f0f0f0;font-weight:700;text-align:center;';
+      if(cs>1) th.colSpan=cs; htr.appendChild(th);
+    });
+    const tbody=tbl.createTBody();
+    for(let i=1;i<labels.length;i++){
+      const tr=tbody.insertRow();
+      [{v:labels[i],left:true,cs:1},{v:singles[i],cs:1},{v:cumuls[i],cs:2}].forEach(({v,left,cs})=>{
+        const td=tr.insertCell(); td.textContent=v||'—';
+        td.style.cssText='border:1px solid #ddd;padding:7px 14px;text-align:'+(left?'left':'center')+';'+(left?'font-weight:700;':'');
+        if(cs>1) td.colSpan=cs;
+      });
+    }
+    view.appendChild(tbl);
+  }
+
+  setTimeout(()=>{
+    fillSel('SL_jb',sheet.dealers||[],'请选择经销商');
+    show('');
+    const el=document.getElementById('SL_jb');
+    if(el) el.onchange=()=>show(el.value);
+  },50);
+}
+
+// ── 数字人单独报：两段 ──
+function renderDigitalHuman(sheet, card){
+  const subA=document.createElement('div'); subA.className='sub-hdr';
+  subA.textContent='快手数字人汇总数据 - 山海'; card.appendChild(subA);
+  const tblA=document.createElement('table'); tblA.style.width='100%';
+  const theadA=tblA.createTHead(); const tbodyA=tblA.createTBody();
+  sheet.section_a.forEach((row,ri)=>{
+    const isHdr=ri<=1; const tr=document.createElement('tr');
+    row.forEach(cd=>{ if(cd.skip)return; tr.appendChild(makeCell(cd,isHdr)); });
+    (isHdr?theadA:tbodyA).appendChild(tr);
+  });
+  const wrapA=document.createElement('div'); wrapA.className='tbl-wrap'; wrapA.appendChild(tblA);
+  card.appendChild(wrapA);
+
+  const sep=document.createElement('div'); sep.style.cssText='height:10px;background:#f0f2f5';
+  card.appendChild(sep);
+
+  const subB=document.createElement('div'); subB.className='sub-hdr';
+  subB.textContent='经销商投放明细'; card.appendChild(subB);
+  const tbodyId='TB_dh';
+  card.appendChild(mkToolbar([{id:'IN_dh',ph:'搜索ERP/经销商...'},{id:'SL_dh',type:'sel',ph:'全部经销商'}]));
+  const tblB=document.createElement('table'); tblB.style.width='100%';
+  const theadB=tblB.createTHead(); const tbodyB=tblB.createTBody(); tbodyB.id=tbodyId;
+  const htrB=theadB.insertRow();
+  sheet.section_b_header.forEach(cd=>{ if(cd.skip)return; htrB.appendChild(makeCell(cd,true)); });
+  sheet.section_b_data.forEach(row=>{
+    const tr=tbodyB.insertRow(); row.forEach(v=>{tr.insertCell().textContent=v;});
+  });
+  const wrapB=document.createElement('div'); wrapB.className='tbl-wrap'; wrapB.appendChild(tblB);
+  card.appendChild(wrapB);
+  setTimeout(()=>{
+    fillSel('SL_dh',sheet.dealers||[],'全部经销商');
+    const fn=()=>filterRows(tbodyId,[
+      document.getElementById('IN_dh')?.value||'',
+      document.getElementById('SL_dh')?.value||''
+    ]);
+    bindFilter(['IN_dh','SL_dh'],fn);
+  },50);
+}
+
+// ── Excel导出 ──
+function exportExcel(mode){
+  if(!_data || typeof XLSX==='undefined'){
+    alert('数据未加载或XLSX库未就绪');return;
+  }
+  const wb = XLSX.utils.book_new();
+  const keys = (mode==='tab') ? [_activeTab] : TABS;
+
+  keys.forEach(key=>{
+    const sheet=_data.sheets[key];
+    if(!sheet) return;
+    const sname=key.replace(/[\\/*?[\]:]/g,'').slice(0,31);
+    let aoa=[];
+
+    if(sheet.type==='text'){
+      aoa=[[sheet.content||'']];
+    } else if(sheet.type==='live_cumul'){
+      sheet.header_rows.forEach(row=>{
+        aoa.push(row.filter(c=>!c.skip).map(c=>c.v||''));
+      });
+      sheet.data_rows.forEach(row=>aoa.push(row));
+    } else if(sheet.type==='digital_human'){
+      sheet.section_a.forEach(row=>aoa.push(row.filter(c=>!c.skip).map(c=>c.v||'')));
+      aoa.push([]);
+      aoa.push(sheet.section_b_header.filter(c=>!c.skip).map(c=>c.v||''));
+      sheet.section_b_data.forEach(row=>aoa.push(row));
+    } else if(sheet.type==='jianbao'){
+      aoa=[['门店名称','当日日期','当日消耗','当日线索','当日CPL','本月累计消耗','本月累计线索','本月累计CPL']];
+      sheet.dealers.forEach(dealer=>{
+        const d=sheet.data[dealer]||{};
+        aoa.push([dealer,d.date_single,d.cost_single,d.leads_single,d.cpl_single,
+                         d.cost_cumul,d.leads_cumul,d.cpl_cumul]);
+      });
+    } else if(sheet.type==='table_styled'){
+      aoa=sheet.rows.map(row=>row.filter(c=>!c.skip).map(c=>c.v||''));
+    } else if(sheet.type==='table_simple'){
+      aoa=[sheet.headers||[]];
+      (sheet.rows||[]).forEach(row=>aoa.push(row));
+    }
+
+    if(aoa.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), sname);
+  });
+
+  const dt=(_data.generated_at||'').slice(0,10).replace(/-/g,'');
+  XLSX.writeFile(wb, mode==='tab'
+    ? `捷途山海_${_activeTab}_${dt}.xlsx`
+    : `捷途山海日报_${dt}.xlsx`);
+}
+
+// ── 主渲染 ──
+function renderAll(data){
+  _data = data;
+  _activeTab = TABS.find(k=>data.sheets[k])||TABS[0];
+  document.getElementById('loading').style.display='none';
+  document.getElementById('upd').textContent='更新：'+(data.generated_at||'');
+  document.getElementById('dlAllBtn').disabled=false;
+  document.getElementById('dlTabBtn').disabled=false;
+
+  const tabBar=document.getElementById('tabBar');
+  const sections=document.getElementById('sections');
+  tabBar.innerHTML=''; sections.innerHTML='';
+  let first=true;
+
+  TABS.forEach(key=>{
+    const sheet=data.sheets[key]; if(!sheet) return;
+
+    const tab=document.createElement('div');
+    tab.className='tab'+(first?' active':'');
+    tab.dataset.key=key; tab.textContent=key;
+    tab.onclick=()=>switchTab(key);
+    tabBar.appendChild(tab);
+
+    const sec=document.createElement('div');
+    sec.className='section'+(first?' active':'');
+    sec.id='S_'+ek(key); first=false;
+
+    const card=document.createElement('div'); card.className='card';
+    const ch=document.createElement('div'); ch.className='card-hdr'; ch.textContent=key;
+    card.appendChild(ch);
+
+    if(sheet.type==='text'){
+      const box=document.createElement('div'); box.className='text-box';
+      box.textContent=sheet.content||''; card.appendChild(box);
+
+    } else if(sheet.type==='live_cumul'){
+      renderLiveCumul(sheet,card);
+
+    } else if(sheet.type==='digital_human'){
+      renderDigitalHuman(sheet,card);
+
+    } else if(sheet.type==='jianbao'){
+      renderJianbao(sheet,card);
+
+    } else if(sheet.type==='table_styled'){
+      const tbodyId='TB_'+ek(key);
+      const needBar=['山海（含直播）','山海（不含直播）','山海余额','山海erp余额'].includes(key);
+      if(needBar) card.appendChild(mkToolbar([
+        {id:'IN_'+ek(key),ph:'搜索大区/经销商...'},
+        {id:'SL_'+ek(key),type:'sel',ph:'全部大区'},
+      ]));
+      renderStyled(sheet.rows,card,tbodyId);
+      if(needBar) setTimeout(()=>{
+        const areas=[...new Set(
+          sheet.rows.filter(r=>!r.some(c=>c.bg||c.bold))
+                    .map(r=>{ const c=r[1]; return c?(c.v!==undefined?c.v:c):''; })
+                    .filter(Boolean)
+        )].sort();
+        fillSel('SL_'+ek(key),areas,'全部大区');
+        const fn=()=>filterRows(tbodyId,[
+          document.getElementById('IN_'+ek(key))?.value||'',
+          document.getElementById('SL_'+ek(key))?.value||''
+        ]);
+        bindFilter(['IN_'+ek(key),'SL_'+ek(key)],fn);
+      },50);
+
+    } else if(sheet.type==='table_simple'){
+      const tbodyId='TB_daily';
+      card.appendChild(mkToolbar([
+        {id:'IN_daily',ph:'搜索经销商/大区...'},
+        {id:'SL_daily_area',type:'sel',ph:'全部大区'},
+        {id:'SL_daily_dealer',type:'sel',ph:'全部经销商'},
+        {id:'IN_daily_date',ph:'日期筛选 2026-04-18',style:'max-width:180px'},
+      ]));
+      renderSimple(sheet,card,tbodyId);
+      setTimeout(()=>{
+        fillSel('SL_daily_area',sheet.areas||[],'全部大区');
+        fillSel('SL_daily_dealer',sheet.dealers||[],'全部经销商');
+        const fn=()=>filterRows(tbodyId,[
+          document.getElementById('IN_daily')?.value||'',
+          document.getElementById('SL_daily_area')?.value||'',
+          document.getElementById('SL_daily_dealer')?.value||'',
+          document.getElementById('IN_daily_date')?.value||''
+        ]);
+        bindFilter(['IN_daily','SL_daily_area','SL_daily_dealer','IN_daily_date'],fn);
+      },50);
+    }
+
+    sec.appendChild(card);
+    sections.appendChild(sec);
+  });
+}
+
+fetch('report_data.json?t='+Date.now())
+  .then(r=>r.json())
+  .then(d=>renderAll(d))
+  .catch(e=>{
+    document.getElementById('loading').innerHTML=
+      `<div style="color:#e00">⚠️ 加载失败：${e.message}</div>`;
+  });
+</script>
+</body>
+</html>
